@@ -175,13 +175,14 @@ void setup() {
   // put your setup code here, to run once:
   mcuInit();
   Serial.begin(230400);
+  Serial.setTimeout(10000); //10 second timeout for parsing disk numbers during disk insert/eject
   Serial.print(F("\r\nSmartportSD v1.14a\r\n"));
 //  initPartition = EEPROM.read(0);
   initPartition=0;
   if (initPartition == 0xFF) initPartition = 0;
   initPartition = (initPartition % 4);
-  //Serial.print(F("\r\nBoot partition: "));
-  //Serial.print(initPartition, DEC);
+  Serial.print(F("\r\nBoot partition: "));
+  Serial.print(initPartition, DEC);
 
   pinMode(ejectPin, INPUT);
   print_hd_info(); //bad! something that prints things shouldn't do essential setup
@@ -193,7 +194,7 @@ void setup() {
   
   for(unsigned char i=0; i<NUM_PARTITIONS; i++){
     //TODO: get file names from EEPROM
-    open_image(devices[i], (part+(i+1)+".PO") );
+    open_image(devices[i], (part+(i+1)+".POF") );
     if(!devices[i].sdf.isOpen()){
       Serial.print(F("\r\nImage "));
       Serial.print(i, DEC);
@@ -203,7 +204,8 @@ void setup() {
     Serial.print(i);
     Serial.print(F(": "));
     Serial.print(freeMemory(), DEC);
-  }  
+    
+  }
 
 }
 
@@ -236,11 +238,30 @@ void loop() {
   PORTD &= ~(_BV(6));    // set RD low
   interrupts();
   while (1) {
-    state = smartport;
+    if(state != smartport ){
+      Serial.print(F("\r\n\r\nChoose a command: E)ject I)nsert"));
+      state = smartport;
+    }
 
     if (digitalRead(ejectPin) == HIGH) rotate_boot();
     
-
+    ui_command = Serial.read();
+    switch (ui_command){
+      // Eject a disk image
+      case 'e':
+      case 'E':
+        state = gotch;
+        eject_disk();
+        break;
+      // Insert a new image
+      case 'i':
+      case 'I':
+        state = gotch;
+        break;
+      default:
+        break;
+    }
+    
     noid = 0;  //reset noid flag
     DDRC = 0xDF; //set ack (wrprot) to input to avoid clashing with other devices when sp bus is not enabled
 
@@ -392,7 +413,7 @@ void loop() {
                 //decode_data_packet();
                 //print_packet((unsigned char*) packet_buffer, 9); //Standard SmartPort command is 9 bytes
                 if (status_code == 0x03) { // if statcode=3, then status with device info block
-                  //Serial.print(F("\r\n******** Sending DIB! ********"));
+                  Serial.print(F("\r\n******** Sending DIB! ********"));
                   encode_status_dib_reply_packet(devices[partition]);
                 } else {  // else just return device status
                   /*Serial.print(F("\r\n-------- Sending status! --------"));
@@ -432,7 +453,7 @@ void loop() {
             break;
 
           case 0xC0:  //Extended status cmd
-            /*digitalWrite(statusledPin, HIGH);
+            digitalWrite(statusledPin, HIGH);
             source = packet_buffer[6];
             Serial.println(source, HEX);
             for (partition = 0; partition < NUM_PARTITIONS; partition++) { //Check if its one of ours
@@ -441,11 +462,11 @@ void loop() {
                 status_code = (packet_buffer[17] & 0x7f) | (((unsigned short)packet_buffer[16] << 3) & 0x80);
                 Serial.println(status_code, HEX);
                 if (status_code == 0x03) { // if statcode=3, then status with device info block
-                  Serial.println(F("Extended status DIB!"));
+                  Serial.println(F("\r\n*********** Extended status DIB!"));
                   delay(50);
                   encode_extended_status_dib_reply_packet(devices[partition]);
                 } else {  // else just return device status
-                  Serial.println(F("\r\nExtended status non-DIB! Part: "));
+                  Serial.print(F("\r\n**************** Extended status non-DIB! Part: "));
                   Serial.print(partition, HEX);
                   Serial.print(F(" code: "));
                   Serial.print(status_code, HEX);
@@ -464,7 +485,7 @@ void loop() {
               }
             }
             Serial.print(F("\r\nHere's our reply!"));
-            print_packet ((unsigned char*) packet_buffer, packet_length());*/
+            print_packet ((unsigned char*) packet_buffer, packet_length());
             break;  
 
           case 0xC1:  //extended readblock cmd
@@ -1002,7 +1023,10 @@ void encode_status_reply_packet (device d)
   //Bit 2: Media write protected
   //Bit 1: Currently interrupting (//c only)
   //Bit 0: Currently open (char devices only) 
-  data[0] = 0b11111000;
+  data[0] = 0b11101000;
+  if( d.online){
+    data[0] |= 0b00010000;
+  }
   //Disk size
   data[1] = d.blocks & 0xff;
   data[2] = (d.blocks >> 8 ) & 0xff;
@@ -1046,7 +1070,7 @@ void encode_status_reply_packet (device d)
 
 
 //*****************************************************************************
-// Function: encode_long_status_reply_packet
+// Function: encode_extended_status_reply_packet
 // Parameters: source
 // Returns: none
 //
@@ -1072,7 +1096,10 @@ void encode_extended_status_reply_packet (device d)
   //Bit 2: Media write protected
   //Bit 1: Currently interrupting (//c only)
   //Bit 0: Currently open (char devices only) 
-  data[0] = 0b11111000;
+  data[0] = 0b11101000;
+  if( d.online){
+    data[0] |= 0b00010000;
+  }
   //Disk size
   data[1] = d.blocks & 0xff;
   data[2] = (d.blocks >> 8 ) & 0xff;
@@ -1177,7 +1204,7 @@ void encode_status_dib_reply_packet (device d)
   packet_buffer[12] = 0x84; //ODDCNT - 4 data bytes
   packet_buffer[13] = 0x83; //GRP7CNT - 3 grps of 7
   packet_buffer[14] = 0xf0; //grp1 msb
-  packet_buffer[15] = 0xf8; //general status - f8
+  packet_buffer[15] = 0xf8; //general status - f8 /////AAAAAAAAAA change status here
   //number of blocks =0x00ffff = 65525 or 32mb
   packet_buffer[16] = d.blocks & 0xff; //block size 1 
   packet_buffer[17] = (d.blocks >> 8 ) & 0xff; //block size 2 
@@ -1190,7 +1217,7 @@ void encode_status_dib_reply_packet (device d)
   packet_buffer[31] = ' CFA   ';
   packet_buffer[38] = 0x80; //odd msb
   packet_buffer[39] = 0x82; //Device type    - 0x02  harddisk
-  packet_buffer[40] = 0x80; //Device Subtype - 0x20
+  packet_buffer[40] = 0xE0; //Device Subtype - 0x60
   packet_buffer[41] = 0x81; //Firmware version 2 bytes
   packet_buffer[42] = 0x90; //
 
@@ -1207,7 +1234,7 @@ void encode_status_dib_reply_packet (device d)
 
 
 //*****************************************************************************
-// Function: encode_long_status_dib_reply_packet
+// Function: encode_extended_status_dib_reply_packet
 // Parameters: source
 // Returns: none
 //
@@ -1251,7 +1278,7 @@ void encode_extended_status_dib_reply_packet (device d)
   packet_buffer[32] = ' CFA   ';
   packet_buffer[39] = 0x80; //odd msb
   packet_buffer[40] = 0x82; //Device type    - 0x02  harddisk
-  packet_buffer[41] = 0xA0; //Device Subtype - 0x20
+  packet_buffer[41] = 0xE0; //Device Subtype - 0x60
   packet_buffer[42] = 0x81; //Firmware version 2 bytes
   packet_buffer[43] = 0x90; //
 
@@ -1622,6 +1649,7 @@ bool open_image( device &d, String filename ){
 
   Serial.print(F("\r\nFile good!"));
   d.blocks = d.sdf.size() >> 9;
+  d.online = true;
 
   return true;
 }
@@ -1633,4 +1661,42 @@ bool is_ours(unsigned char source){
     }
   }
   return false;
+}
+
+void eject_disk(){
+  Serial.print(F("\r\nEject which disk?\r\n"));
+  Serial.print(F("0) go back\r\n"));
+  for(int i =0; i < NUM_PARTITIONS; i++){
+    if(devices[i].online && devices[i].sdf.isOpen()){
+      Serial.print(i + 1, DEC);         // Serial.parseInt returns zero for failure, so we have to start our image index at 1
+      Serial.print(F(") "));
+      devices[i].sdf.printName();
+      Serial.print(F("\r\n"));
+    }
+  }
+  unsigned int toGo = Serial.parseInt(SKIP_WHITESPACE);
+  if(toGo == 0){
+    Serial.print(F("\r\nTimed out, invalid entry, or you chose to leave. All disk status remains the same."));
+  }else if(toGo > NUM_PARTITIONS ){
+    Serial.print(F("\r\nWe don't have that many disks, old chap!"));
+  }
+  if( toGo == 0 || toGo > NUM_PARTITIONS ) return;  // Bail out if not a valid image number
+  toGo -= 1; // Change back to a zero-indexed value for the devices array
+  if( !devices[toGo].online ){
+    Serial.print(F("\r\nThat disk is already offline!"));
+    return;               //Bail out if it's already not mounted
+  }
+  //Finally we can unmount it
+  devices[toGo].sdf.close();
+  devices[toGo].online = false;
+  encode_status_reply_packet(devices[toGo]);        
+  noInterrupts();
+  DDRD = 0x40; //set rd as output
+  status = SendPacket( (unsigned char*) packet_buffer);
+  DDRD = 0x00; //set rd back to input so back to tristate
+  interrupts();
+  //printf_P(PSTR("\r\nSent Packet Data\r\n") );
+  //print_packet ((unsigned char*) packet_buffer,packet_length());
+  //Serial.print(F("\r\nStatus CMD"));
+  digitalWrite(statusledPin, LOW);
 }
