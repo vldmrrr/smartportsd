@@ -1,5 +1,5 @@
 # SmartportSD FAT version 1.15
-
+*Forked from [gitlab](https://gitlab.com/tersteeg/smartportsd)*
 This is an enhancement of the [SmartportCFA/SmartportSD](http://www.users.on.net/~rjustice/SmartportCFA/SmartportCFA.htm) project by Robert Justice and Andrea Ottaviani. Instead of relying on four raw disk images written sequentially to an SD card, this version allows you to have up to four files on a FAT or FAT32 formatted SD card instead.
 
 # Usage
